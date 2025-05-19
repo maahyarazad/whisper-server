@@ -8,7 +8,9 @@ import uuid
 from gtts import gTTS
 from flask import send_file
 import io
-
+from TTS.api import TTS
+import soundfile as sf 
+import torch
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -17,7 +19,7 @@ app = Flask(__name__)
 CORS(app)  # Allow CORS for frontend requests
 
 # Load the Whisper model once
-whisper_model = whisper.load_model("base")
+whisper_model = whisper.load_model("tiny.en")
 
 API_KEY = os.getenv('TRANSCRIBE_API_KEY', 'your-secret-key')
 
@@ -31,20 +33,21 @@ def require_api_key():
         
 @app.route('/api/transcribe', methods=['POST'])
 def transcribe_and_send():
-    if 'audio' not in request.files:
-        return jsonify({'error': 'No audio file provided'}), 400
-
-    audio_file = request.files['audio']
-    temp_path = os.path.join("temp_audio", audio_file.filename)
-    os.makedirs("temp_audio", exist_ok=True)
-    audio_file.save(temp_path)
-
-    # Transcribe
-    result = whisper_model.transcribe(temp_path, language="en")
-    transcription = result['text']
-
-    # Send to Ollama
     try:
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
+
+        audio_file = request.files['audio']
+        temp_path = os.path.join("temp_audio", audio_file.filename)
+        os.makedirs("temp_audio", exist_ok=True)
+        audio_file.save(temp_path)
+
+        # Transcribe
+        result = whisper_model.transcribe(temp_path, language="en")
+        transcription = result['text']
+
+        # Send to Ollama
+    
         ollama_response = requests.post(
             "http://localhost:11434/api/generate",
             json={
@@ -57,30 +60,40 @@ def transcribe_and_send():
         ollama_data = ollama_response.json()
         response_text = ollama_data.get("response", "No response key found")
         logging.debug(ollama_data)
-        # Generate a unique filename
-        filename = f"{uuid.uuid4()}.mp3"
 
-        # Create and save TTS audio
-        tts = gTTS(ollama_response.json()["response"])
-        #tts.save(filename)
-        mp3_fp = io.BytesIO()
-        tts.write_to_fp(mp3_fp)
-        mp3_fp.seek(0)
+
+        # 1. Instantiate without “gpu” flag:
+        tts = TTS(model_name="tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False)
+
+        # 2. Move it onto CUDA (if you have a GPU), or leave it on CPU:
+        #    – for GPU:
+        # If you have a GPU, move it there:
+        if torch.cuda.is_available():
+            tts.to("cuda")
+        else:
+            tts.to("cpu")
+
+        output_path = "output.wav"
+
+        # If file exists, remove it so tts_to_file can overwrite
+        if os.path.exists(output_path):
+            os.remove(output_path)
+            
+        tts.tts_to_file(text=ollama_response.json()["response"], file_path=output_path)
+
+
+        return send_file(
+            output_path,
+            mimetype="audio/wav",
+            as_attachment=False,
+            download_name="response.wav",
+        )
 
     except Exception as e:
+        logging.exception("Error in /api/transcribe")
+        response_text = f"Error: {str(e)}"
 
-        response_text = f"Error contacting Ollama: {str(e)}"
 
-    return send_file(
-        mp3_fp,
-        mimetype="audio/mpeg",
-        as_attachment=True,
-        download_name="response.mp3"
-    )
-    #return jsonify({
-    #    "transcription": transcription,
-    #    "ollama_response": ollama_response.json()["response"]
-    #})
 
 if __name__ == '__main__':
     app.run(debug=True, port=6000)
