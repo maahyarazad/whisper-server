@@ -3,7 +3,14 @@ import whisper
 import requests
 import os
 from flask_cors import CORS
-# import subprocess
+import logging
+import uuid
+from gtts import gTTS
+from flask import send_file
+import io
+
+logging.basicConfig(level=logging.DEBUG)
+
 
 
 app = Flask(__name__)
@@ -49,14 +56,31 @@ def transcribe_and_send():
         ollama_response.raise_for_status()
         ollama_data = ollama_response.json()
         response_text = ollama_data.get("response", "No response key found")
+        logging.debug(ollama_data)
+        # Generate a unique filename
+        filename = f"{uuid.uuid4()}.mp3"
+
+        # Create and save TTS audio
+        tts = gTTS(ollama_response.json()["response"])
+        #tts.save(filename)
+        mp3_fp = io.BytesIO()
+        tts.write_to_fp(mp3_fp)
+        mp3_fp.seek(0)
+
     except Exception as e:
 
         response_text = f"Error contacting Ollama: {str(e)}"
 
-    return jsonify({
-        "transcription": transcription,
-        "ollama_response": ollama_response.json()["response"]
-    })
+    return send_file(
+        mp3_fp,
+        mimetype="audio/mpeg",
+        as_attachment=True,
+        download_name="response.mp3"
+    )
+    #return jsonify({
+    #    "transcription": transcription,
+    #    "ollama_response": ollama_response.json()["response"]
+    #})
 
 if __name__ == '__main__':
     app.run(debug=True, port=6000)
