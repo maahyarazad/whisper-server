@@ -4,6 +4,7 @@ __pycache__/
 *.pyd
 .env
 whisper-env/
+whisper-cpp/
 temp_audio/
 .vscode/
 gi
