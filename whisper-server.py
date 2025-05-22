@@ -239,8 +239,8 @@ def transcribe_and_send():
         ollama_api_end = time.perf_counter()  
         logging.debug(f"Ollama Process Elapsed time: {ollama_api_end - ollama_api_start:.4f} seconds")
 
-        if "I've booked a meeting" in assistant_response:
-            threading.Thread(target=send_webhook, args=({"message": assistant_response,})).start()
+        if "Meeting booked!" in assistant_response or "I've got you booked" in assistant_response or "I've booked a meeting" in assistant_response or "Your meeting is all set" in assistant_response or "meeting is booked for" in assistant_response:
+                threading.Thread(target=send_webhook, args=({"message": user_histories[user_id]},)).start()
 
 
         return jsonify({
