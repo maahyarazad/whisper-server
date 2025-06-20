@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 import copy
 import threading
-
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
@@ -65,9 +65,9 @@ def send_to_ollama_chat(prompt , user_id, model="llama3"):
             json={
                 "model": model,
                 "messages": message ,
-                "stream": True
+                "stream": False
             },
-            stream=True
+            stream=False
         ) as response:
             response.raise_for_status()
 
