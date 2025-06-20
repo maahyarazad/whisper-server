@@ -1,4 +1,6 @@
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify, Response
+from dotenv import load_dotenv
+import os
 import whisper
 import requests
 import os
@@ -19,10 +21,12 @@ from collections import defaultdict
 import copy
 import threading
 from datetime import datetime
-
+from openai import OpenAI
+import logging
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
 
+load_dotenv()
 user_histories = defaultdict(list) 
 
 # Load the Whisper model once
@@ -50,6 +54,56 @@ initial_assistant_reply = ""
 
 initial_chat_history = []
 
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def stream_and_store_response(prompt, user_id):
+    full_response = ""
+
+    for chunk in send_to_openai_chatgpt_stream(prompt, user_id):
+        full_response += chunk
+        yield chunk  # stream this part to the client
+
+    # After streaming is done, store the full assistant response
+    if user_id:
+        user_histories[user_id].append({"role": "assistant", "content": full_response})
+
+def send_to_openai_chatgpt_stream(prompt, user_id = None, model="gpt-4o-mini"):
+    try:
+        if user_id is None:
+            messages = [{"role": "user", "content": prompt}]
+        else:
+            if user_id not in user_histories:
+                user_histories[user_id] = []
+            user_histories[user_id].append({"role": "user", "content": prompt})
+            messages = user_histories[user_id]
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            stream=True,
+        )
+
+        full_response = ""
+        for chunk in response:
+            delta = getattr(chunk.choices[0].delta, "content", "")
+            if delta:
+                full_response += delta
+                yield delta
+
+        if user_id is not None:
+            user_histories[user_id].append({"role": "assistant", "content": full_response})
+
+    except Exception as e:
+        logging.error(f"OpenAI API error: {e}")
+        yield f"[Error: {e}]"
+
+
+
+
+
+
 def send_to_ollama_chat(prompt , user_id, model="llama3"):
 
     message = None
@@ -65,9 +119,9 @@ def send_to_ollama_chat(prompt , user_id, model="llama3"):
             json={
                 "model": model,
                 "messages": message ,
-                "stream": False
+                "stream": True
             },
-            stream=False
+            stream=True
         ) as response:
             response.raise_for_status()
 
@@ -89,6 +143,7 @@ def send_to_ollama_chat(prompt , user_id, model="llama3"):
     except requests.RequestException as e:
         print(f"Request failed: {e}")
         return "Error communicating with model"
+
 
 
 def send_to_ollama_generate(prompt):
@@ -227,13 +282,13 @@ def transcribe_and_send():
                   
         user_histories[user_id].append({"role": "user", "content": transcription})
 
-        # Call Ollama
-        assistant_response = send_to_ollama_chat( None , user_id)
+        # Call ChatGPT
+        assistant_response = Response(send_to_openai_chatgpt_stream(transcription,user_id), mimetype="text/plain")
 
-        # Append assistant response
-        user_histories[user_id].append({"role": "assistant", "content": assistant_response})
-        
-
+        return Response(
+            stream_and_store_response(transcription, user_id),
+            mimetype="text/plain"
+        )
 
         logging.debug(assistant_response)
         ollama_api_end = time.perf_counter()  
@@ -243,9 +298,9 @@ def transcribe_and_send():
                 threading.Thread(target=send_webhook, args=({"message": user_histories[user_id]},)).start()
 
 
-        return jsonify({
-           "ollama_response": assistant_response
-        })
+        # return jsonify({
+        #    "ollama_response": assistant_response
+        # })
 
         # 1. Instantiate without “gpu” flag:
         tts = TTS(model_name="tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False)
@@ -284,10 +339,13 @@ def transcribe_and_send():
 if __name__ == '__main__':
     
     initial_chat_history.append({"role": "user", "content": initial_prompt})
-    
-    assistant_reply = send_to_ollama_chat(initial_prompt, None)
-    
+
+    assistant_reply = ""
+    for chunk in send_to_openai_chatgpt_stream(initial_prompt, model="gpt-4o-mini"):
+        assistant_reply += chunk
+
     initial_chat_history.append({"role": "assistant", "content": assistant_reply})
 
     app.run(host='0.0.0.0', debug=False, port=8081, threaded=True)
+
 
